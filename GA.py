@@ -58,7 +58,7 @@ L_tot = np.zeros((nb_ind,nb_gen))
    
 # Drawing random porosity values for each individual            
 for i in range (nb_ind):
-    Gen1[i, :] = np.random.uniform(0.2, 0.4, 4) 
+    Gen1[i, :] = np.random.uniform(minpor, maxpor, 4) 
 
 # Compute the fitnes of each individual of a generation using the likelihood function
 def likelihood_fitness(Gen, nb_ind): # creation of a function to be used later on
@@ -125,60 +125,134 @@ def DNAmix(parents):
 def mutation(child, mutation_rate): # Function to mutate the DNA of a child
     child_mutated = []
     forbidden_indices = {0, 1, 5, 6, 10, 11, 15, 16} # Define the indices that cannot be mutated
-
     for DNA in child:  # Iterate through all children
         mutation = list(DNA)  # Convert string to list for modification
         mutable_indices = [i for i in range(len(DNA)) if i not in forbidden_indices]  # Allowed mutation indices
-
         if mutable_indices and rd.random() < mutation_rate:  # Apply mutation with mutation_rate probability
             j = rd.choice(mutable_indices)  # Pick a random index to mutate
             mutation[j] = str(rd.randint(0, 9))  # Replace that character with a random digit
 
         child_mutated.append("".join(mutation))  # Convert back to string and store
-
     return child_mutated  # Return the list of children after mutation
 
-#%% BREEDING
-
-def breeding(nb_ind, Gen, L, nb_breed):
-    # Initiatlisation of a matrix for new Generation 
-    NewGen = np.zeros((nb_ind,4), dtype=object)
-    # Cloning of the best individual from Gen 1 in Gen 2 and encode his DNA
-    best_ind = breeding_selection(L, Gen, nb_breed)[1]
-    best_ind = np.expand_dims(best_ind, axis=0) # Transform the vector in 2D, so it has the shape 1 x 4
-    NewGen[0, :] = encodingDNA(best_ind)
-    # Retreive only the fittest individuals and encode their DNA
-    fittest_ind = breeding_selection(L, Gen, nb_breed)[0]
-    fittest_list = encodingDNA(fittest_ind)
-    # Shuffle the individuals randomly
-    rd.shuffle(fittest_list)
-    pairs = [(fittest_list[i], fittest_list[i+1]) for i in range(0, len(fittest_list)-1, 2)] # Pair the shuffled individuals
-    # For each pair create children by mixing the parents DNA
-    index = 1 # need to create a second index to navigate into NewGen, because pairs contains tuples
-    for parent1, parent2 in pairs:
-        NewGen[index,:] = DNAmix((parent1, parent2)) # Fill NewGen with children, NewGen already contain the clone in first line
-        index += 1
-    # MAYBE INSERT HERE THE CALL FOR THE MUTATION FUNCTION
-    return NewGen
-
 #%% DECODING DNA
+Gen_decoded = []  # List to store decoded matrix rows
+
+def decodingDNA(NewGen):
+    for DNA in NewGen:
+        # Split the DNA string into 4 substrings of length 4 (each representing one porosity value)
+        porosities = [float(DNA[i:i+4]) for i in range(0, len(DNA), 4)] # Convert each substring to a float
+        Gen_decoded.append(porosities)  # Append the porosity values to the list
+    return np.array(Gen_decoded)  # Return as a NumPy array
 
 
 #%% CHECK PRIOR
 
+def check_prior(Gen_decoded, minpor, maxpor):
+    """
+    Check if the decoded porosity values are within the prior range.
+    Returns the updated Gen_decoded and a list indicating whether each individual is within the prior range.
+    """
+    within_prior = []  # List to track whether the individuals' porosity values are within the prior range
+    for individual in Gen_decoded:
+        # Check if all values of the individual are within the prior range
+        within_prior_individual = [minpor <= value <= maxpor for value in individual]
+        within_prior.append(within_prior_individual)
+        
+        # If any value is outside the prior, do not modify the individual (keep it as is)
+        # This assumes you don't modify individuals in this function, only track whether they're valid
+    return Gen_decoded, within_prior
+
+#%% BREEDING
+
+def breeding(nb_ind, Gen, L, nb_breed, Gen_decoded, mutation_rate, nb_migration, minpor, maxpor):
+
+    for gen_index in range(1, nb_gen):  # Loop through each generation
+
+        # Initiatlisation of a matrix for new Generation 
+        NewGen = np.zeros((nb_ind,4), dtype=object)
+        # Cloning of the best individual from Gen 1 in Gen 2 and encode his DNA
+        best_ind = breeding_selection(L, Gen, nb_breed)[1]
+        best_ind = np.expand_dims(best_ind, axis=0) # Transform the vector in 2D, so it has the shape 1 x 4
+        NewGen[0, :] = encodingDNA(best_ind)
+        # Retreive only the fittest individuals and encode their DNA
+        fittest_ind = breeding_selection(L, Gen, nb_breed)[0]
+        fittest_list = encodingDNA(fittest_ind)
+        # Shuffle the individuals randomly
+        rd.shuffle(fittest_list)
+        pairs = [(fittest_list[i], fittest_list[i+1]) for i in range(0, len(fittest_list)-1, 2)] # Pair the shuffled individuals
+        # For each pair create children by mixing the parents DNA
+        
+        index = 1  # Start index for NewGen after the best individual
+        valid_children = 0  # Counter for valid children
+        
+        while valid_children < nb_ind - nb_migration:  # Keep generating until we have the desired number of individuals
+            for parent1, parent2 in pairs:
+                child = DNAmix((parent1, parent2)) # Create a child from the parents' DNA
+                # Apply mutation to the children
+                mutated_child = mutation(child, mutation_rate)
+                # Decode the DNA of the children
+                Gen_decoded = decodingDNA(mutated_child)
+                # Check if the children are within the prior range
+                Gen_decoded, within_prior = check_prior(Gen_decoded, minpor, maxpor)
+                
+                # If the child is within the prior range, add it to NewGen
+                if all(within_prior[index]):  # Ensure all the values of the child are within the prior range
+                    NewGen[index, :] = mutated_child
+                    valid_children += 1 # Increment the valid children counter
+                    index += 1  # Move to the next position in NewGen
+                    
+                    # calculate the likelihood of the child
+                    L_tot[index, gen_index] = likelihood_fitness(Gen_decoded, nb_ind)  # Add the likelihood of the child to the matrix
+                    
+                if valid_children >= nb_ind - nb_migration:
+                    break
+        
+        # Update the current population for the next generation
+        Gen = NewGen  # The new generation becomes the current generation for the next loop
+    
+    return Gen
 
 #%% MIGRATION
 
-# def migration():
-    #
-    #
-    #    
-    #return immigration
+def migration(nb_migration, minpor, maxpor):
+    # Generate new individuals to migrate into the population
+    immigration = np.zeros((nb_migration, 4), dtype=object)
+    for i in range(nb_migration):
+        immigration[i, :] = np.rd.uniform(minpor, maxpor, 4) # Generate random porosity values for each individual  
+    return immigration
 
-#%% NEW GENERATION CREATION
+#%% POPULATION EVOLUTION
+
+# Initialize a 3D matrix to hold all generations
+Pop = np.zeros((nb_gen, nb_ind, 4), dtype=object)
+Pop[0] = Gen1  # Store the first generation in the 3D matrix
+
+# Initialize a matrix to hold the new generation
+NewGen = np.zeros((nb_ind, 4), dtype=object) 
+
+# Initialize the current generation with the first generation
+Gen = Gen1
+
+# Loop through each generation
+for generation in range(nb_gen):
+    print(f"Generation {generation + 1}/{nb_gen}")
+
+    # Step 1: Perform Breeding
+    NewGen = breeding(nb_ind, Gen, L_tot, nb_breed, Gen_decoded, mutation_rate, nb_migration, minpor, maxpor)  # Generate new individuals via breeding
+
+    # Step 2: Apply Migration
+    immigration = migration(NewGen, nb_migration)  # Generate new immigrants
+    NewGen = np.vstack((NewGen, immigration))  # Add the immigrants to the new generation
+
+    # Step 3: Store the new generation (2D matrix) into the 3D matrix
+    Pop[generation] = NewGen  # Store the 2D matrix for the current generation
+
+
+
 
 # We call the breeding function to create Gen 2 from Gen 1
-Gen2 = breeding(nb_ind, Gen1, L_tot[:,0], nb_breed)
+#Gen2 = breeding(nb_ind, Gen1, L_tot[:,0], nb_breed)
 
 # We pass our new generation to the decode function to check the Prior
 # DECODING DNA
